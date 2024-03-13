@@ -206,21 +206,35 @@ class Unifi {
     }
   }
 
-  getFirewallRule(fwRuleName) {
+  getFirewallRules() {
     logger.debug('Retrieving all firewall rules...');
     return this.axiosClient.get('/proxy/network/api/s/default/rest/firewallrule')
-      .then(async (response) => {
-        if (response.data.meta.rc !== 'ok') throw 'getFirewallRule() Error calling /proxy/network/api/s/default/rest/firewallrule'
-        logger.debug(`[${response.config.id}] Firewall rules, sucessfully retrieved, retrieving rule "${fwRuleName}"`);
-        const firewallRule = response.data.data.find(rule => rule.name === fwRuleName);
-        const fwRule = { id: firewallRule._id, enabled: firewallRule.enabled };
-        logger.debug(`[${response.config.id}] Found Firewall Rule "${fwRuleName}": ${JSON.stringify(fwRule)}`);
-        return fwRule;
-      })
-      .catch(error => {
+      .then(response => {
+        if (response.data.meta.rc !== 'ok') throw 'getFirewallRules() Error calling /proxy/network/api/s/default/rest/firewallrule';
+
+        logger.debug(`[${response.config.id}] Firewall rules sucessfully retrieved!`);
+        return response.data.data.map(fwRule => {
+          return {
+           id: fwRule._id,
+           name: fwRule.name,
+           enabled: fwRule.enabled
+          };
+        });
+      },
+      
+      error => {
         logger.error(`Unable to retrieve all firewall rules! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
         throw error;
       });
+  }
+
+  getFirewallRule(fwRuleName) {
+    return getFirewallRules().then(fwRules => {
+      logger.debug(`Firewall rules sucessfully retrieved, retrieving rule "${fwRuleName}"`);
+      const fwRule = fwRules.find(rule => rule.name === fwRuleName);
+      if (!fwRule) throw 'getFirewallRule() Error calling /proxy/network/api/s/default/rest/firewallrule'
+      return fwRule;
+    });
   }
 
   setFirewallRule(fwRuleId, isEnabled) {
@@ -231,37 +245,50 @@ class Unifi {
     
     logger.debug(`Updating firewall rule "${fwRuleId}"...`);
     return this.axiosClient.put('/proxy/network/api/s/default/group/firewallrule', fwObject)
-      .then((response) => {
+      .then(response => {
         if (response.data.meta.rc !== 'ok') throw 'setFirewallRule() Error calling /proxy/network/api/s/default/group/firewallrule'
-      })
-      .catch(error => {
+      },
+      
+      error => {
         logger.error(`Unable to update firewall rule! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
         throw error;
       });;
   }
 
-  getUsgState() {
-    logger.debug('Retrieving USG state...');
+  getDevicesState() {
+    logger.debug('Retrieving all devices state...');
+
+    const DEVICE_STATE_MAP = {
+      1: 'online',
+      5: 'adopting'
+    }
 
     return this.axiosClient.get('/proxy/network/api/s/default/stat/device-basic')
-      .then((response) => {
-        if (response.data.meta.rc !== 'ok') throw 'getUsgState() Error calling /proxy/network/api/s/default/stat/device-basic'
+      .then(response => {
+        if (response.data.meta.rc !== 'ok') throw 'getDevicesState() Error calling /proxy/network/api/s/default/stat/device-basic'
 
-        const usg = response.data.data.find(e => e.name === 'USG');
-        //const arrayStatus = ["online", "offline", "updating", "restarting", "resetting", "adopting"];
-        switch (usg.state) {
-          case 1:
-            return "online";
-          case 5:
-            return "adopting";
-        }
+        logger.debug(`[${response.config.id}] Devices state sucessfully retrieved!`);
+        return response.data.data.map(device => {
+          return {
+            name: device.name,
+            state: DEVICE_STATE_MAP[device.state] || device.state
+          };
+        });
+      },
 
-        return usg.state;
-      })
-      .catch(error => {
-        logger.error(`Unable to retrieve USG state! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
+      error => {
+        logger.error(`Unable to retrieve all devices state! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
         throw error;
       });
+  }
+
+  getUsgState() {
+    return getDevicesState().then(devices => {
+      logger.debug(`Devices state sucessfully retrieved, retrieving USG device`);
+      const usg = devices.find(device => device.name === 'USG');
+      if (!usg) throw 'getUsgState() Unable to retrieve USG state'
+      return usg;
+    });
   }
 
   isInternetBlocked() {
