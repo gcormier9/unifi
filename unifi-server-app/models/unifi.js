@@ -193,9 +193,8 @@ class Unifi {
     const EVENT_DEVICE_STATE_CHANGED = 'DEVICE_STATE_CHANGED';
     if (json?.type !== EVENT_DEVICE_STATE_CHANGED) return;
 
-    const usg = json?.devices?.network?.find(e => e.name === 'USG');
-    if (usg) {
-      const wsMessage = {type: EVENT_DEVICE_STATE_CHANGED, name: usg.name, status: usg.status};
+    json?.devices?.network?.forEach(device => {
+      const wsMessage = {type: EVENT_DEVICE_STATE_CHANGED, name: device.name, status: device.status};
       logger.http(`Received ${EVENT_DEVICE_STATE_CHANGED} websocket message from UniFi: ${JSON.stringify(wsMessage)}`);
       if (this.webSocketServer) {
         // Publish websocket message to all cliens (browsers)
@@ -203,7 +202,7 @@ class Unifi {
           if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(wsMessage));
         });
       }
-    }
+    });
   }
 
   getFirewallRules() {
@@ -229,7 +228,7 @@ class Unifi {
   }
 
   getFirewallRule(fwRuleName) {
-    return getFirewallRules().then(fwRules => {
+    return this.getFirewallRules().then(fwRules => {
       logger.debug(`Firewall rules sucessfully retrieved, retrieving rule "${fwRuleName}"`);
       const fwRule = fwRules.find(rule => rule.name === fwRuleName);
       if (!fwRule) throw 'getFirewallRule() Error calling /proxy/network/api/s/default/rest/firewallrule'
@@ -259,11 +258,12 @@ class Unifi {
     logger.debug('Retrieving all devices state...');
 
     const DEVICE_STATE_MAP = {
+      0: 'offline',
       1: 'online',
       5: 'adopting'
     }
 
-    return this.axiosClient.get('/proxy/network/api/s/default/stat/device-basic')
+    return this.axiosClient.get('/proxy/network/api/s/default/stat/device?include_client_tables=false')
       .then(response => {
         if (response.data.meta.rc !== 'ok') throw 'getDevicesState() Error calling /proxy/network/api/s/default/stat/device-basic'
 
@@ -283,11 +283,11 @@ class Unifi {
   }
 
   getUsgState() {
-    return getDevicesState().then(devices => {
+    return this.getDevicesState().then(devices => {
       logger.debug(`Devices state sucessfully retrieved, retrieving USG device`);
       const usg = devices.find(device => device.name === 'USG');
       if (!usg) throw 'getUsgState() Unable to retrieve USG state'
-      return usg;
+      return usg.state;
     });
   }
 

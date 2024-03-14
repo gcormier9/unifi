@@ -44,5 +44,14 @@ module.exports = (unifi) => {
     }
   });
 
+  ////////////////////////////////////////////////////////////////////////////////
+
+  router.get('/devices', async (req, res, next) => {
+    logger.http(`Request received: ${req.method} ${req.url}`);
+    unifi.getDevicesState()
+      .then(devices => res.json(devices))
+      .catch(error => handleError(res, error));
+  });
+
   return router;
 };

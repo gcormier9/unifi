@@ -24,6 +24,7 @@ const App = () => {
 
   // Run when a new WebSocket message is received (lastJsonMessage)
   useEffect(() => {
+    console.log('Websocket message received', lastJsonMessage);
     if (lastJsonMessage?.type === 'DEVICE_STATE_CHANGED' && lastJsonMessage?.name === 'USG') {
       setUsgState(lastJsonMessage.status);
     }
@@ -73,8 +74,18 @@ const App = () => {
     });
   };
 
+  const getDevicesState = () => {
+    fetchGet('/api/devices').then((devices) => {
+      setDevices(devices);
+    })
+    .catch((err) => {
+      console.log(`Error caught in getDevicesState() ${err}`);
+    });
+  };
+
   const [fwInternet, setFwInternet] = useState();
   const [usgState, setUsgState] = useState('Unknown');
+  const [devices, setDevices] = useState([]);
 
   let internetStatus1 = 'Unknown';
   let internetStatus2 = 'Unknown';
@@ -100,7 +111,14 @@ const App = () => {
   useEffect(() => {
     getInternetStatus();
     getUsgState();
+    getDevicesState();
  }, []);
+
+ const deviceStateCSSMap = {
+  'offline': 'danger',
+  'online': 'success',
+  'adopting': 'warning' 
+ };
 
   return (
     <div className="container text-center">
@@ -110,6 +128,17 @@ const App = () => {
       <button className={`mt-3 w-100 btn btn-lg btn-${cssClass2}`} onClick={() => setInternetStatus(!fwInternet)}>
         {internetStatus2} Internet
       </button>
+      
+      <hr className='hr'/>
+      <h2>Devices</h2>
+      <ul className='list-group list-group-flush'>
+      {devices.map((device) => (
+        <li className="list-group-item d-flex justify-content-between align-items-center">
+          <span>{device.name}</span>
+          <span className={`fs-6 badge text-bg-${deviceStateCSSMap[device.state] || 'primary'}`}>{device.state}</span>
+        </li>
+      ))}
+      </ul>
     </div>
   );
 };
