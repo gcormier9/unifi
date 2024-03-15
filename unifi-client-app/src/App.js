@@ -83,9 +83,30 @@ const App = () => {
     });
   };
 
+  const getFirewallRules = () => {
+    fetchGet('/api/firewall').then((fwRules) => {
+      setFwRules(fwRules);
+    })
+    .catch((err) => {
+      console.log(`Error caught in getDevicesState() ${err}`);
+    });
+  };
+
+  const getClients = () => {
+    fetchGet('/api/clients').then((clients) => {
+      setClients(clients);
+    })
+    .catch((err) => {
+      console.log(`Error caught in getDevicesState() ${err}`);
+    });
+  };
+
   const [fwInternet, setFwInternet] = useState();
   const [usgState, setUsgState] = useState('Unknown');
   const [devices, setDevices] = useState([]);
+  const [fwRules, setFwRules] = useState([]);
+  const [clients, setClients] = useState([]);
+
 
   let internetStatus1 = 'Unknown';
   let internetStatus2 = 'Unknown';
@@ -112,6 +133,8 @@ const App = () => {
     getInternetStatus();
     getUsgState();
     getDevicesState();
+    getFirewallRules();
+    getClients();
  }, []);
 
  const deviceStateCSSMap = {
@@ -136,6 +159,19 @@ const App = () => {
         <li className="list-group-item d-flex justify-content-between align-items-center">
           <span>{device.name}</span>
           <span className={`fs-6 badge text-bg-${deviceStateCSSMap[device.state] || 'primary'}`}>{device.state}</span>
+        </li>
+      ))}
+      </ul>
+
+      <hr className='hr'/>
+      <h2>Firewall Rules</h2>
+      <ul className='list-group list-group-flush'>
+      {fwRules.map((fwRule) => (
+        <li className="list-group-item">
+          <div className="form-check form-check-reverse form-switch d-flex justify-content-between align-items-center">
+            <label className="form-check-label" for="flexSwitchCheckChecked">{fwRule.name}</label>
+            <input className="form-check-input" type="checkbox" role="switch" id="flexSwitchCheckChecked" defaultChecked={fwRule.enabled ? true : false} />
+          </div>
         </li>
       ))}
       </ul>

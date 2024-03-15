@@ -215,7 +215,9 @@ class Unifi {
         return response.data.data.map(fwRule => {
           return {
            id: fwRule._id,
+           rule_index: fwRule.rule_index,
            name: fwRule.name,
+           ruleset: fwRule.ruleset,
            enabled: fwRule.enabled
           };
         });
@@ -255,7 +257,7 @@ class Unifi {
   }
 
   getDevicesState() {
-    logger.debug('Retrieving all devices state...');
+    logger.debug('Retrieving all Unifi devices state...');
 
     const DEVICE_STATE_MAP = {
       0: 'offline',
@@ -265,7 +267,7 @@ class Unifi {
 
     return this.axiosClient.get('/proxy/network/api/s/default/stat/device?include_client_tables=false')
       .then(response => {
-        if (response.data.meta.rc !== 'ok') throw 'getDevicesState() Error calling /proxy/network/api/s/default/stat/device-basic'
+        if (response.data.meta.rc !== 'ok') throw 'getDevicesState() Error calling /proxy/network/api/s/default/stat/device'
 
         logger.debug(`[${response.config.id}] Devices state sucessfully retrieved!`);
         return response.data.data.map(device => {
@@ -278,6 +280,47 @@ class Unifi {
 
       error => {
         logger.error(`Unable to retrieve all devices state! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
+        throw error;
+      });
+  }
+
+  getClients() {
+    logger.debug('Retrieving all client devices...');
+
+    const urls = [
+      '/proxy/network/v2/api/site/default/clients/active?includeTrafficUsage=true&includeUnifiDevices=true',
+      '/proxy/network/v2/api/site/default/clients/history?onlyNonBlocked=true&includeUnifiDevices=true&withinHours=24',
+      '/proxy/network/v2/api/site/default/clients/history?onlyBlocked=true&withinHours=0'
+    ];
+
+    return Promise.all(urls.map(url => this.axiosClient.get(url)))
+      .then(responses => {
+        let clients = [];
+        for (const response of responses) {
+          //if (response.data.meta.rc !== 'ok') throw 'getClients() Error calling /proxy/network/v2/api/site/default/clients/history';
+
+          logger.debug(`[${response.config.id}] Client devices sucessfully retrieved!`);
+          const clientList = response.data.map(client => {
+            return {
+              id: client.id,
+              name: client.name,
+              display_name: client.display_name,
+              mac: client.mac,
+              oui: client.oui,
+              last_seen: client.last_seen,
+              blocked: client.blocked,
+              status: client.status
+            };
+          });
+
+          clients = clients.concat(clientList);          
+        }
+
+        return clients;
+      },
+      
+      error => {
+        logger.error(`Unable to retrieve all firewall rules! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
         throw error;
       });
   }

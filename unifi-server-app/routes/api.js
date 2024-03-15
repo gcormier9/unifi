@@ -49,7 +49,21 @@ module.exports = (unifi) => {
   router.get('/devices', async (req, res, next) => {
     logger.http(`Request received: ${req.method} ${req.url}`);
     unifi.getDevicesState()
-      .then(devices => res.json(devices))
+      .then(data => res.json(data))
+      .catch(error => handleError(res, error));
+  });
+
+  router.get('/firewall', async (req, res, next) => {
+    logger.http(`Request received: ${req.method} ${req.url}`);
+    unifi.getFirewallRules()
+      .then(data => res.json(data))
+      .catch(error => handleError(res, error));
+  });
+
+  router.get('/clients', async (req, res, next) => {
+    logger.http(`Request received: ${req.method} ${req.url}`);
+    unifi.getClients()
+      .then(data => res.json(data))
       .catch(error => handleError(res, error));
   });
 
