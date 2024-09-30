@@ -35,6 +35,10 @@ class Unifi {
       if (!config.id) config.id = id++;
       logger.http(`[${config.id}] Sending request to UniFi: ${config.method.toUpperCase()} ${config.url}`);
       logger.http(`[${config.id}]  X-Csrf-Token: ${config.headers['X-Csrf-Token']}`);
+      logger.http(config.baseURL);
+      logger.http(config.url);
+      logger.http(config.method);
+      logger.http(JSON.stringify(config.data));
       return config;
     });
   }
@@ -156,16 +160,27 @@ class Unifi {
         this.axiosClient.defaults.headers.common['Cookie'] = response.headers['set-cookie'].toString();
         this.axiosClient.defaults.headers.common['X-Csrf-Token'] = jwtPayloadJson.csrfToken
 
-        this.unifiClientWebSocket = new WebSocket('wss://192.168.2.3/api/ws/system', {
+        this.unifiClientSystemWebSocket = new WebSocket('wss://192.168.2.3/api/ws/system', {
           rejectUnauthorized: false,
           headers: {
             Cookie: response.headers['set-cookie']
           }
         });
 
-        this.unifiClientWebSocket.on('error', this.onUnifiWebSocketError);
-        this.unifiClientWebSocket.on('open', this.onUnifiWebSocketOpen);
-        this.unifiClientWebSocket.on('message', (data, isBinary) => this.onUnifiWebSocketMessage(data, isBinary));
+        this.unifiClientSystemWebSocket.on('error', () => { logger.error(`onUnifiSystemWebSocketError() ${JSON.stringify(error)}`); });
+        this.unifiClientSystemWebSocket.on('open', () => { logger.debug('onUnifiSystemWebSocketOpen()'); });
+        this.unifiClientSystemWebSocket.on('message', (data, isBinary) => this.onUnifiSystemWebSocketMessage(data, isBinary));
+
+        this.unifiClientEventWebSocket = new WebSocket('wss://192.168.2.3/proxy/network/wss/s/default/events?clients=v2&critical_notifications=true', {
+          rejectUnauthorized: false,
+          headers: {
+            Cookie: response.headers['set-cookie']
+          }
+        });
+
+        this.unifiClientEventWebSocket.on('error', () => { logger.error(`onUnifiEventWebSocketError() ${JSON.stringify(error)}`); });
+        this.unifiClientEventWebSocket.on('open', () => { logger.debug('onUnifiEventWebSocketOpen()'); });
+        this.unifiClientEventWebSocket.on('message', (data, isBinary) => this.onUnifiEventWebSocketMessage(data, isBinary));
     })
     .catch(async (error) => {
       logger.error(`Unable to login to UniFi! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
@@ -174,18 +189,8 @@ class Unifi {
     });
   }
 
-  // Error on the websocket connection with UniFi
-  onUnifiWebSocketError(error) {
-    logger.error(`onUnifiWebSocketError() ${JSON.stringify(error)}`);
-  }
-
-  // Websocket connection established with UniFi
-  onUnifiWebSocketOpen() {
-    logger.debug('onUnifiWebSocketOpen()');
-  }
-
-  // Received websocket message from UniFi
-  onUnifiWebSocketMessage(data, isBinary) {
+  // Received system websocket message from UniFi
+  onUnifiSystemWebSocketMessage(data, isBinary) {
     const message = isBinary ? data : data.toString();
     const json = JSON.parse(message);
   
@@ -194,8 +199,14 @@ class Unifi {
     if (json?.type !== EVENT_DEVICE_STATE_CHANGED) return;
 
     json?.devices?.network?.forEach(device => {
-      const wsMessage = {type: EVENT_DEVICE_STATE_CHANGED, name: device.name, status: device.status};
+      const wsMessage = {
+        type: EVENT_DEVICE_STATE_CHANGED,
+        name: device.name,
+        status: device.status
+      };
+
       logger.http(`Received ${EVENT_DEVICE_STATE_CHANGED} websocket message from UniFi: ${JSON.stringify(wsMessage)}`);
+      logger.debug(device);
       if (this.webSocketServer) {
         // Publish websocket message to all cliens (browsers)
         this.webSocketServer.clients.forEach(client => {
@@ -203,6 +214,55 @@ class Unifi {
         });
       }
     });
+  }
+
+  // Received event websocket message from UniFi
+  onUnifiEventWebSocketMessage(data, isBinary) {
+    const message = isBinary ? data : data.toString();
+    const json = JSON.parse(message);
+
+    const EVENT_CLIENT_STATE_CHANGED = 'CLIENT_STATE_CHANGED';
+    const EVENT_FW_RULE_CHANGED = 'FIREWALL_RULE_CHANGED';
+
+    if (json?.meta?.message === 'events') {
+      json?.data?.forEach(event => {
+        if (event.key === 'EVT_WC_Blocked' || event.key === 'EVT_WC_Unblocked') {
+          const wsMessage = {
+            type: EVENT_CLIENT_STATE_CHANGED,
+            mac: event.client,
+            state: event.key === 'EVT_WC_Blocked' ? 'blocked' : 'unblocked'
+          };
+          
+          logger.http(`Received ${EVENT_CLIENT_STATE_CHANGED} websocket message from UniFi: ${JSON.stringify(wsMessage)}`);
+          logger.debug(event);
+          if (this.webSocketServer) {
+            // Publish websocket message to all cliens (browsers)
+            this.webSocketServer.clients.forEach(client => {
+              if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(wsMessage));
+            });
+          }
+        }
+      });
+    } else if (json?.meta?.message === 'firewallrule:sync') {
+      json?.data?.forEach(event => {
+        if (event._id !== undefined && event.enabled !== undefined) {
+          const wsMessage = {
+            type: EVENT_FW_RULE_CHANGED,
+            id: event._id,
+            name: event.name,
+            enabled: event.enabled
+          };
+
+          logger.http(`Received ${EVENT_FW_RULE_CHANGED} websocket message from UniFi: ${JSON.stringify(wsMessage)}`);
+          if (this.webSocketServer) {
+            // Publish websocket message to all cliens (browsers)
+            this.webSocketServer.clients.forEach(client => {
+              if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(wsMessage));
+            });
+          }
+        }
+      });
+    }
   }
 
   getFirewallRules() {
@@ -248,12 +308,16 @@ class Unifi {
     return this.axiosClient.put('/proxy/network/api/s/default/group/firewallrule', fwObject)
       .then(response => {
         if (response.data.meta.rc !== 'ok') throw 'setFirewallRule() Error calling /proxy/network/api/s/default/group/firewallrule'
+        return {
+          status: response.status,
+          statusText: response.statusText
+        };
       },
       
       error => {
         logger.error(`Unable to update firewall rule! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
         throw error;
-      });;
+      });
   }
 
   getDevicesState() {
@@ -325,29 +389,28 @@ class Unifi {
       });
   }
 
-  getUsgState() {
-    return this.getDevicesState().then(devices => {
-      logger.debug(`Devices state sucessfully retrieved, retrieving USG device`);
-      const usg = devices.find(device => device.name === 'USG');
-      if (!usg) throw 'getUsgState() Unable to retrieve USG state'
-      return usg.state;
-    });
-  }
+  setClientState(macAddress, action) {
+    if (action != 'block' && action != 'unblock') throw  new Error(`Invalid action parameter: ${action}`);
 
-  isInternetBlocked() {
-    return this.getFirewallRule('Block Internet').then(firewallRule => firewallRule.enabled);
-  }
-
-  enableInternet() {
-    return this.getFirewallRule('Block Internet').then(firewallRule => {
-      this.setFirewallRule(firewallRule.id, false);
-    });
-  }
-
-  disableInternet() {
-    return this.getFirewallRule('Block Internet').then(firewallRule => {
-      this.setFirewallRule(firewallRule.id, true);
-    });
+    const clientObject = {
+      mac: macAddress,
+      cmd: action === 'block' ? 'block-sta' : 'unblock-sta'
+    }
+    
+    logger.debug(`Set client (MAC Address) "${macAddress}" state to ${action}...`);
+    return this.axiosClient.post('/proxy/network/api/s/default/cmd/stamgr', clientObject)
+      .then(response => {
+        if (response.data.meta.rc !== 'ok') throw 'blockClient() Error calling /proxy/network/api/s/default/cmd/stamgr'
+        return {
+          status: response.status,
+          statusText: response.statusText
+        };
+      },
+      
+      error => {
+        logger.error(`Unable to set client state! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
+        throw error;
+      });
   }
 
   getNativeClass(obj) {
