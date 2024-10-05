@@ -14,34 +14,53 @@ const handleError = (res, error) => {
 
 module.exports = (unifi) => {
 
-  router.get('/state', async (req, res, next) => {
+  router.get('/devices', async (req, res, next) => {
     logger.http(`Request received: ${req.method} ${req.url}`);
-    unifi.isInternetBlocked()
-      .then(data => res.json({fwInternet: data }))
+    unifi.getDevicesState()
+      .then(data => res.json(data))
       .catch(error => handleError(res, error));
   });
-  
-  router.get('/state/usg', async (req, res, next) => {
+
+  router.get('/clients', async (req, res, next) => {
     logger.http(`Request received: ${req.method} ${req.url}`);
-    unifi.getUsgState()
-      .then(data => res.json({usgState: data }))
+    unifi.getClients()
+      .then(data => res.json(data))
       .catch(error => handleError(res, error));
   });
-  
-  router.post('/state', async (req, res, next) => {
+
+  router.get('/firewalls', async (req, res, next) => {
     logger.http(`Request received: ${req.method} ${req.url}`);
-    const fwInternet = req?.body?.fwInternet;
-    
-    if (fwInternet) {
-      unifi.disableInternet()
-        .then(() => res.json({fwInternet: fwInternet}))
-        .catch(error => handleError(res, error));
-    }
-    else {
-      unifi.enableInternet()
-        .then(() => res.json({fwInternet: fwInternet}))
-        .catch(error => handleError(res, error));
-    }
+    unifi.getFirewallRules()
+      .then(data => res.json(data))
+      .catch(error => handleError(res, error));
+  });
+
+  router.post('/client/:macAddress/block', async (req, res, next) => {
+    logger.http(`Request received: ${req.method} ${req.url}`);
+    unifi.setClientState(req.params['macAddress'], 'block')
+      .then(data => res.json(data))
+      .catch(error => handleError(res, error));
+  });
+
+  router.post('/client/:macAddress/unblock', async (req, res, next) => {
+    logger.http(`Request received: ${req.method} ${req.url}`);
+    unifi.setClientState(req.params['macAddress'], 'unblock')
+      .then(data => res.json(data))
+      .catch(error => handleError(res, error));
+  });
+
+  router.post('/firewall/:id/enable', async (req, res, next) => {
+    logger.http(`Request received: ${req.method} ${req.url}`);
+    unifi.setFirewallRule(req.params['id'], true)
+      .then(data => res.json(data))
+      .catch(error => handleError(res, error));
+  });
+
+  router.post('/firewall/:id/disable', async (req, res, next) => {
+    logger.http(`Request received: ${req.method} ${req.url}`);
+    unifi.setFirewallRule(req.params['id'], false)
+      .then(data => res.json(data))
+      .catch(error => handleError(res, error));
   });
 
   return router;

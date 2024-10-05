@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "build": "npm run build --prefix unifi-client-app",
-    "client": "npm start --prefix unifi-client-app",
+    "client": "npm run dev --prefix unifi-client-app",
     "server": "npm start --prefix unifi-server-app",
     "install": "npm install --prefix unifi-client-app",
     "postinstall": "npm install --prefix unifi-server-app"

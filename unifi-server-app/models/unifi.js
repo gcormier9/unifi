@@ -35,6 +35,10 @@ class Unifi {
       if (!config.id) config.id = id++;
       logger.http(`[${config.id}] Sending request to UniFi: ${config.method.toUpperCase()} ${config.url}`);
       logger.http(`[${config.id}]  X-Csrf-Token: ${config.headers['X-Csrf-Token']}`);
+      logger.http(config.baseURL);
+      logger.http(config.url);
+      logger.http(config.method);
+      logger.http(JSON.stringify(config.data));
       return config;
     });
   }
@@ -156,16 +160,27 @@ class Unifi {
         this.axiosClient.defaults.headers.common['Cookie'] = response.headers['set-cookie'].toString();
         this.axiosClient.defaults.headers.common['X-Csrf-Token'] = jwtPayloadJson.csrfToken
 
-        this.unifiClientWebSocket = new WebSocket('wss://192.168.2.3/api/ws/system', {
+        this.unifiClientSystemWebSocket = new WebSocket('wss://192.168.2.3/api/ws/system', {
           rejectUnauthorized: false,
           headers: {
             Cookie: response.headers['set-cookie']
           }
         });
 
-        this.unifiClientWebSocket.on('error', this.onUnifiWebSocketError);
-        this.unifiClientWebSocket.on('open', this.onUnifiWebSocketOpen);
-        this.unifiClientWebSocket.on('message', (data, isBinary) => this.onUnifiWebSocketMessage(data, isBinary));
+        this.unifiClientSystemWebSocket.on('error', () => { logger.error(`onUnifiSystemWebSocketError() ${JSON.stringify(error)}`); });
+        this.unifiClientSystemWebSocket.on('open', () => { logger.debug('onUnifiSystemWebSocketOpen()'); });
+        this.unifiClientSystemWebSocket.on('message', (data, isBinary) => this.onUnifiSystemWebSocketMessage(data, isBinary));
+
+        this.unifiClientEventWebSocket = new WebSocket('wss://192.168.2.3/proxy/network/wss/s/default/events?clients=v2&critical_notifications=true', {
+          rejectUnauthorized: false,
+          headers: {
+            Cookie: response.headers['set-cookie']
+          }
+        });
+
+        this.unifiClientEventWebSocket.on('error', () => { logger.error(`onUnifiEventWebSocketError() ${JSON.stringify(error)}`); });
+        this.unifiClientEventWebSocket.on('open', () => { logger.debug('onUnifiEventWebSocketOpen()'); });
+        this.unifiClientEventWebSocket.on('message', (data, isBinary) => this.onUnifiEventWebSocketMessage(data, isBinary));
     })
     .catch(async (error) => {
       logger.error(`Unable to login to UniFi! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
@@ -174,18 +189,8 @@ class Unifi {
     });
   }
 
-  // Error on the websocket connection with UniFi
-  onUnifiWebSocketError(error) {
-    logger.error(`onUnifiWebSocketError() ${JSON.stringify(error)}`);
-  }
-
-  // Websocket connection established with UniFi
-  onUnifiWebSocketOpen() {
-    logger.debug('onUnifiWebSocketOpen()');
-  }
-
-  // Received websocket message from UniFi
-  onUnifiWebSocketMessage(data, isBinary) {
+  // Received system websocket message from UniFi
+  onUnifiSystemWebSocketMessage(data, isBinary) {
     const message = isBinary ? data : data.toString();
     const json = JSON.parse(message);
   
@@ -193,34 +198,104 @@ class Unifi {
     const EVENT_DEVICE_STATE_CHANGED = 'DEVICE_STATE_CHANGED';
     if (json?.type !== EVENT_DEVICE_STATE_CHANGED) return;
 
-    const usg = json?.devices?.network?.find(e => e.name === 'USG');
-    if (usg) {
-      const wsMessage = {type: EVENT_DEVICE_STATE_CHANGED, name: usg.name, status: usg.status};
+    json?.devices?.network?.forEach(device => {
+      const wsMessage = {
+        type: EVENT_DEVICE_STATE_CHANGED,
+        name: device.name,
+        status: device.status
+      };
+
       logger.http(`Received ${EVENT_DEVICE_STATE_CHANGED} websocket message from UniFi: ${JSON.stringify(wsMessage)}`);
+      logger.debug(device);
       if (this.webSocketServer) {
         // Publish websocket message to all cliens (browsers)
         this.webSocketServer.clients.forEach(client => {
           if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(wsMessage));
         });
       }
+    });
+  }
+
+  // Received event websocket message from UniFi
+  onUnifiEventWebSocketMessage(data, isBinary) {
+    const message = isBinary ? data : data.toString();
+    const json = JSON.parse(message);
+
+    const EVENT_CLIENT_STATE_CHANGED = 'CLIENT_STATE_CHANGED';
+    const EVENT_FW_RULE_CHANGED = 'FIREWALL_RULE_CHANGED';
+
+    if (json?.meta?.message === 'events') {
+      json?.data?.forEach(event => {
+        if (event.key === 'EVT_WC_Blocked' || event.key === 'EVT_WC_Unblocked') {
+          const wsMessage = {
+            type: EVENT_CLIENT_STATE_CHANGED,
+            mac: event.client,
+            state: event.key === 'EVT_WC_Blocked' ? 'blocked' : 'unblocked'
+          };
+          
+          logger.http(`Received ${EVENT_CLIENT_STATE_CHANGED} websocket message from UniFi: ${JSON.stringify(wsMessage)}`);
+          logger.debug(event);
+          if (this.webSocketServer) {
+            // Publish websocket message to all cliens (browsers)
+            this.webSocketServer.clients.forEach(client => {
+              if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(wsMessage));
+            });
+          }
+        }
+      });
+    } else if (json?.meta?.message === 'firewallrule:sync') {
+      json?.data?.forEach(event => {
+        if (event._id !== undefined && event.enabled !== undefined) {
+          const wsMessage = {
+            type: EVENT_FW_RULE_CHANGED,
+            id: event._id,
+            name: event.name,
+            enabled: event.enabled
+          };
+
+          logger.http(`Received ${EVENT_FW_RULE_CHANGED} websocket message from UniFi: ${JSON.stringify(wsMessage)}`);
+          if (this.webSocketServer) {
+            // Publish websocket message to all cliens (browsers)
+            this.webSocketServer.clients.forEach(client => {
+              if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(wsMessage));
+            });
+          }
+        }
+      });
     }
   }
 
-  getFirewallRule(fwRuleName) {
+  getFirewallRules() {
     logger.debug('Retrieving all firewall rules...');
     return this.axiosClient.get('/proxy/network/api/s/default/rest/firewallrule')
-      .then(async (response) => {
-        if (response.data.meta.rc !== 'ok') throw 'getFirewallRule() Error calling /proxy/network/api/s/default/rest/firewallrule'
-        logger.debug(`[${response.config.id}] Firewall rules, sucessfully retrieved, retrieving rule "${fwRuleName}"`);
-        const firewallRule = response.data.data.find(rule => rule.name === fwRuleName);
-        const fwRule = { id: firewallRule._id, enabled: firewallRule.enabled };
-        logger.debug(`[${response.config.id}] Found Firewall Rule "${fwRuleName}": ${JSON.stringify(fwRule)}`);
-        return fwRule;
-      })
-      .catch(error => {
+      .then(response => {
+        if (response.data.meta.rc !== 'ok') throw 'getFirewallRules() Error calling /proxy/network/api/s/default/rest/firewallrule';
+
+        logger.debug(`[${response.config.id}] Firewall rules sucessfully retrieved!`);
+        return response.data.data.map(fwRule => {
+          return {
+           id: fwRule._id,
+           rule_index: fwRule.rule_index,
+           name: fwRule.name,
+           ruleset: fwRule.ruleset,
+           enabled: fwRule.enabled
+          };
+        });
+      },
+      
+      error => {
         logger.error(`Unable to retrieve all firewall rules! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
         throw error;
       });
+  }
+
+  getFirewallRule(fwRuleName) {
+    return this.getFirewallRules().then(fwRules => {
+      logger.debug(`Firewall rules sucessfully retrieved, retrieving rule "${fwRuleName}"`);
+      const fwRule = fwRules.find(rule => rule.name === fwRuleName);
+      if (!fwRule) throw 'getFirewallRule() Error calling /proxy/network/api/s/default/rest/firewallrule'
+      return fwRule;
+    });
   }
 
   setFirewallRule(fwRuleId, isEnabled) {
@@ -231,53 +306,111 @@ class Unifi {
     
     logger.debug(`Updating firewall rule "${fwRuleId}"...`);
     return this.axiosClient.put('/proxy/network/api/s/default/group/firewallrule', fwObject)
-      .then((response) => {
+      .then(response => {
         if (response.data.meta.rc !== 'ok') throw 'setFirewallRule() Error calling /proxy/network/api/s/default/group/firewallrule'
-      })
-      .catch(error => {
+        return {
+          status: response.status,
+          statusText: response.statusText
+        };
+      },
+      
+      error => {
         logger.error(`Unable to update firewall rule! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
-        throw error;
-      });;
-  }
-
-  getUsgState() {
-    logger.debug('Retrieving USG state...');
-
-    return this.axiosClient.get('/proxy/network/api/s/default/stat/device-basic')
-      .then((response) => {
-        if (response.data.meta.rc !== 'ok') throw 'getUsgState() Error calling /proxy/network/api/s/default/stat/device-basic'
-
-        const usg = response.data.data.find(e => e.name === 'USG');
-        //const arrayStatus = ["online", "offline", "updating", "restarting", "resetting", "adopting"];
-        switch (usg.state) {
-          case 1:
-            return "online";
-          case 5:
-            return "adopting";
-        }
-
-        return usg.state;
-      })
-      .catch(error => {
-        logger.error(`Unable to retrieve USG state! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
         throw error;
       });
   }
 
-  isInternetBlocked() {
-    return this.getFirewallRule('Block Internet').then(firewallRule => firewallRule.enabled);
+  getDevicesState() {
+    logger.debug('Retrieving all Unifi devices state...');
+
+    const DEVICE_STATE_MAP = {
+      0: 'offline',
+      1: 'online',
+      5: 'adopting'
+    }
+
+    return this.axiosClient.get('/proxy/network/api/s/default/stat/device?include_client_tables=false')
+      .then(response => {
+        if (response.data.meta.rc !== 'ok') throw 'getDevicesState() Error calling /proxy/network/api/s/default/stat/device'
+
+        logger.debug(`[${response.config.id}] Devices state sucessfully retrieved!`);
+        return response.data.data.map(device => {
+          return {
+            name: device.name,
+            state: DEVICE_STATE_MAP[device.state] || device.state
+          };
+        });
+      },
+
+      error => {
+        logger.error(`Unable to retrieve all devices state! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
+        throw error;
+      });
   }
 
-  enableInternet() {
-    return this.getFirewallRule('Block Internet').then(firewallRule => {
-      this.setFirewallRule(firewallRule.id, false);
-    });
+  getClients() {
+    logger.debug('Retrieving all client devices...');
+
+    const urls = [
+      '/proxy/network/v2/api/site/default/clients/active?includeTrafficUsage=true&includeUnifiDevices=true',
+      '/proxy/network/v2/api/site/default/clients/history?onlyNonBlocked=true&includeUnifiDevices=true&withinHours=24',
+      '/proxy/network/v2/api/site/default/clients/history?onlyBlocked=true&withinHours=0'
+    ];
+
+    return Promise.all(urls.map(url => this.axiosClient.get(url)))
+      .then(responses => {
+        let clients = [];
+        for (const response of responses) {
+          //if (response.data.meta.rc !== 'ok') throw 'getClients() Error calling /proxy/network/v2/api/site/default/clients/history';
+
+          logger.debug(`[${response.config.id}] Client devices sucessfully retrieved!`);
+          const clientList = response.data.map(client => {
+            return {
+              id: client.id,
+              name: client.name,
+              display_name: client.display_name,
+              mac: client.mac,
+              oui: client.oui,
+              last_seen: client.last_seen,
+              blocked: client.blocked,
+              status: client.status
+            };
+          });
+
+          clients = clients.concat(clientList);          
+        }
+
+        return clients;
+      },
+      
+      error => {
+        logger.error(`Unable to retrieve all firewall rules! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
+        throw error;
+      });
   }
 
-  disableInternet() {
-    return this.getFirewallRule('Block Internet').then(firewallRule => {
-      this.setFirewallRule(firewallRule.id, true);
-    });
+  setClientState(macAddress, action) {
+    if (action != 'block' && action != 'unblock') throw  new Error(`Invalid action parameter: ${action}`);
+
+    const clientObject = {
+      mac: macAddress,
+      cmd: action === 'block' ? 'block-sta' : 'unblock-sta'
+    }
+    
+    logger.debug(`Set client (MAC Address) "${macAddress}" state to ${action}...`);
+    return this.axiosClient.post('/proxy/network/api/s/default/cmd/stamgr', clientObject)
+      .then(response => {
+        if (response.data.meta.rc !== 'ok') throw 'blockClient() Error calling /proxy/network/api/s/default/cmd/stamgr'
+        return {
+          status: response.status,
+          statusText: response.statusText
+        };
+      },
+      
+      error => {
+        logger.error(`Unable to set client state! HTTP ${error?.response?.status} ${error?.response?.statusText}`);
+        throw error;
+      });
   }
 
   getNativeClass(obj) {
